@@ -77,7 +77,7 @@ footer{text-align:center;font-size:12px;color:var(--mute);padding:16px}
   <button data-t="map">7 · Kediri map</button>
 </nav>
 <main>
-<div class="demo">Prototype for demonstration. Tray images and historical records are synthetic demo data. The leftover estimator uses a transparent colour-segmentation stand-in for the CNN described in the essay.</div>
+<div class="demo">Prototype for demonstration. Tray images and historical records are synthetic demo data. The in-browser AI baselines are k-means colour clustering for leftovers and a random forest for larval yield, trained here on demo data. The production CNN is trained on weighed SPPG records.</div>
 
 <!-- 1 SCAN -->
 <section id="scan" class="on">
@@ -156,6 +156,18 @@ footer{text-align:center;font-size:12px;color:var(--mute);padding:16px}
         <div class="kpi green"><div class="v" id="fArea">0</div><div class="l">m² of tray area needed</div></div>
       </div>
       <p class="note" style="margin-top:10px">Seeding uses 163 mg dry feed per larva per day and 1.2 larvae per cm² (Amrul et al., 2022). Forecasts retrain weekly on weighed records.</p>
+      <div class="card" style="margin-top:10px;background:#F6F7F9"><h3>HUB-AI larval yield prediction</h3>
+        <div class="grid g3">
+          <div><label>Vegetable share of substrate (%)</label><input type="number" id="yVeg" value="45"></div>
+          <div><label>Larvae loading (g per m²)</label><input type="number" id="yLoad" value="22"></div>
+          <div><label>Feed depth (cm)</label><input type="number" id="yDep" value="4"></div>
+          <div><label>Cycle time (days)</label><input type="number" id="yCyc" value="15"></div>
+          <div><label>Mean tray temperature (°C)</label><input type="number" id="yTmp" value="29"></div>
+          <div><label>Feeding rate (kg per m² per day)</label><input type="number" id="yFr" value="4.5" step="0.1"></div>
+        </div>
+        <div class="grid g2" style="margin-top:10px"><div class="kpi green"><div class="v" id="yPred">0</div><div class="l">predicted fresh larvae, kg per m²</div></div><div class="kpi"><div class="v" id="yR2">0</div><div class="l">random forest R² on held-out demo batches</div></div></div>
+        <p class="note">Random forest (40 trees) trained in the browser on 300 synthetic batch records. The method follows Muinde et al. (2023), where a random forest explained 81% of yield variation on real rearing data.</p>
+      </div>
       <table id="fcTbl" style="margin-top:8px"><thead><tr><th>SPPG</th><th class="num">Enrolled</th><th class="num">Leftover rate</th><th class="num">kg</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
@@ -181,7 +193,7 @@ footer{text-align:center;font-size:12px;color:var(--mute);padding:16px}
       <h3>Results per year</h3>
       <div class="flow" id="flow"></div>
       <div class="grid g2" style="margin-top:12px">
-        <div class="kpi green"><div class="v" id="pRatio">0</div><div class="l">kg catfish per tonne of leftovers (Plate-to-Pond Ratio)</div></div>
+        <div class="kpi green"><div class="v" id="pRatio">0</div><div class="l">kg dry larval meal per tonne of leftovers (Plate-to-Pond Ratio)</div></div><div class="kpi blue"><div class="v" id="pSave">0</div><div class="l">Rp billion feed cost saved per year</div></div>
         <div class="kpi green"><div class="v" id="pCO2">0</div><div class="l">t CO₂e avoided versus landfill</div></div>
       </div>
       <p class="note" style="margin-top:10px" id="pWarn"></p>
@@ -238,20 +250,36 @@ function drawTray(ctx, fill, seed) {
     const x = r[0] * W + 8, y = r[1] * H + 8, w = r[2] * W - 16, h = r[3] * H - 16;
     ctx.fillStyle = '#DDE1E6'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 12); ctx.fill();
     const f = fill[i]; ctx.fillStyle = FOODCOL[i];
-    const n = Math.round(40 * f);
-    for (let k = 0; k < n; k++) { const cx = x + 10 + rnd() * (w - 20), cy = y + 10 + rnd() * (h - 20), rr = 6 + rnd() * Math.min(w, h) * .14; ctx.beginPath(); ctx.ellipse(cx, cy, rr, rr * .8, rnd() * 3, 0, 7); ctx.fill(); }
+    const n = Math.round(70 * f);
+    for (let k = 0; k < n; k++) { const cx = x + 10 + rnd() * (w - 20), cy = y + 10 + rnd() * (h - 20), rr = 5 + rnd() * Math.min(w, h) * .09; ctx.beginPath(); ctx.ellipse(cx, cy, rr, rr * .8, rnd() * 3, 0, 7); ctx.fill(); }
   });
 }
-function foodShare(ctx) {
-  const W = ctx.canvas.width, H = ctx.canvas.height, d = ctx.getImageData(0, 0, W, H).data, out = [];
+// --- k-means colour clustering (unsupervised ML) ---
+function kmeans(pts, k, iters) {
+  const D = pts[0].length, d2 = (a, b) => { let s = 0; for (let q = 0; q < D; q++) s += (a[q] - b[q]) ** 2; return s; };
+  let C = [pts[0].slice()]; while (C.length < k) { let bi = 0, bd = -1; pts.forEach((p, i) => { const m = Math.min(...C.map(c => d2(p, c))); if (m > bd) { bd = m; bi = i; } }); C.push(pts[bi].slice()); } // farthest-point init
+  let lab = new Array(pts.length).fill(0);
+  for (let it = 0; it < iters; it++) {
+    for (let i = 0; i < pts.length; i++) { let b = 0, bd = 1e12; for (let c = 0; c < k; c++) { const d = d2(pts[i], C[c]); if (d < bd) { bd = d; b = c; } } lab[i] = b; }
+    const S = C.map(() => new Array(D + 1).fill(0)); pts.forEach((p, i) => { const s = S[lab[i]]; for (let q = 0; q < D; q++) s[q] += p[q]; s[D]++; });
+    C = S.map((s, c) => s[D] ? s.slice(0, D).map(v => v / s[D]) : C[c]);
+  }
+  return { C, lab };
+}
+const feat = p => [p[0], p[1], p[2], 3 * (p[0] - p[2])]; // RGB plus amplified warmth, separates cool steel from warm food
+let TRAYC = null; // tray colour centroid learned from the before image border
+function samplePix(ctx, step) { const W = ctx.canvas.width, H = ctx.canvas.height, d = ctx.getImageData(0, 0, W, H).data, pts = [], pos = []; for (let y = 0; y < H; y += step) for (let x = 0; x < W; x += step) { const i = (y * W + x) * 4; pts.push([d[i], d[i + 1], d[i + 2]]); pos.push([x, y]); } return { pts, pos, W, H }; }
+function trayCentroids(ctx) {
+  const s = samplePix(ctx, 3); const m = kmeans(s.pts.map(feat), 8, 10);
+  // tray clusters = low-saturation light clusters (stainless surface and rim)
+  return m.C.filter(c => c[2] - c[0] >= 2 && Math.max(c[0], c[1], c[2]) - Math.min(c[0], c[1], c[2]) < 26 && c[0] > 160);
+}
+function foodShare(ctx, trayC) {
+  const s = samplePix(ctx, 2), out = [];
+  const isTray = p => { const f = feat(p); return trayC.some(c => f.reduce((a, v, q) => a + (v - c[q]) ** 2, 0) < 600); };
   REG.forEach(r => {
-    const x0 = Math.floor(r[0] * W + 12), y0 = Math.floor(r[1] * H + 12), x1 = Math.floor((r[0] + r[2]) * W - 12), y1 = Math.floor((r[1] + r[3]) * H - 12);
-    let food = 0, tot = 0;
-    for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) {
-      const i = (y * W + x) * 4, R = d[i], G = d[i + 1], B = d[i + 2];
-      const grayish = Math.abs(R - G) < 14 && Math.abs(G - B) < 16 && R > 175 && R < 236; // stainless tray surface
-      tot++; if (!grayish) food++;
-    }
+    const x0 = r[0] * s.W + 12, y0 = r[1] * s.H + 12, x1 = (r[0] + r[2]) * s.W - 12, y1 = (r[1] + r[3]) * s.H - 12; let food = 0, tot = 0;
+    s.pos.forEach((q, i) => { if (q[0] >= x0 && q[0] < x1 && q[1] >= y0 && q[1] < y1) { tot++; if (!isTray(s.pts[i])) food++; } });
     out.push(food / Math.max(tot, 1));
   });
   return out;
@@ -269,7 +297,7 @@ $('#demoBtn').onclick = loadDemo;
 $('#fBefore').onchange = e => e.target.files[0] && fileTo(cb, e.target.files[0]);
 $('#fAfter').onchange = e => e.target.files[0] && fileTo(ca, e.target.files[0]);
 $('#runScan').onclick = () => {
-  const b = foodShare(cb), a = foodShare(ca), m = MENUS[$('#menu').value], served = +$('#served').value || 0;
+  TRAYC = trayCentroids(cb); const b = foodShare(cb, TRAYC), a = foodShare(ca, TRAYC), m = MENUS[$('#menu').value], served = +$('#served').value || 0;
   const rows = m.d.map((dish, i) => { const left = Math.min(1, b[i] > 0.02 ? a[i] / b[i] : 0); const kg = left * m.g[i] / 1000 * served; return { comp: i + 1, dish, cat: m.cat[i], g: m.g[i], left, kg }; });
   overlay(ca);
   $('#scanTbl tbody').innerHTML = rows.map(r => `<tr><td>${r.comp}</td><td>${r.dish}</td><td class="num">${r.g}</td><td class="num">${fmt(r.left * 100, 1)}%</td><td class="num">${fmt(r.kg, 1)}</td></tr>`).join('');
@@ -340,6 +368,30 @@ function forecast() {
 }
 ['hubSel', 'fcMenu', 'att', 'kw'].forEach(id => $('#' + id).addEventListener('input', forecast)); forecast();
 
+
+// ---------- HUB-AI random forest (larval yield) ----------
+const RF = (function () {
+  let s = 42; const rnd = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const gen = () => { const veg = 20 + rnd() * 60, load = 10 + rnd() * 25, dep = 2 + rnd() * 5, cyc = 12 + rnd() * 8, tmp = 24 + rnd() * 12, fr = 2.5 + rnd() * 4;
+    let y = 3 + 0.18 * load - 0.003 * load * load * 1.2 + 0.9 * fr - 0.012 * (veg - 40) ** 2 / 4 - 0.6 * Math.abs(dep - 4) - 0.25 * (tmp - 29) ** 2 / 2 + 0.25 * (cyc - 12) + (rnd() - .5) * 2.2;
+    return { x: [veg, load, dep, cyc, tmp, fr], y: Math.max(0.5, y) }; };
+  const data = Array.from({ length: 300 }, gen), train = data.slice(0, 240), test = data.slice(240);
+  const mean = a => a.reduce((p, c) => p + c, 0) / a.length;
+  function build(rows, depth) {
+    const ys = rows.map(r => r.y); if (depth === 0 || rows.length < 8) return { v: mean(ys) };
+    let best = null; const feats = [0, 1, 2, 3, 4, 5].sort(() => rnd() - .5).slice(0, 3);
+    for (const f of feats) { const vals = rows.map(r => r.x[f]).sort((a, b) => a - b); for (let q = 1; q < 8; q++) { const th = vals[Math.floor(q * vals.length / 8)]; const L = rows.filter(r => r.x[f] < th), R = rows.filter(r => r.x[f] >= th); if (L.length < 4 || R.length < 4) continue; const sse = [L, R].reduce((acc, g) => { const m = mean(g.map(r => r.y)); return acc + g.reduce((a, r) => a + (r.y - m) ** 2, 0); }, 0); if (!best || sse < best.sse) best = { f, th, sse, L, R }; } }
+    if (!best) return { v: mean(ys) }; return { f: best.f, th: best.th, l: build(best.L, depth - 1), r: build(best.R, depth - 1) };
+  }
+  const pred1 = (n, x) => n.v !== undefined ? n.v : pred1(x[n.f] < n.th ? n.l : n.r, x);
+  const trees = Array.from({ length: 40 }, () => build(Array.from({ length: train.length }, () => train[Math.floor(rnd() * train.length)]), 6));
+  const predict = x => mean(trees.map(t => pred1(t, x)));
+  const ym = mean(test.map(r => r.y)); const r2 = 1 - test.reduce((a, r) => a + (r.y - predict(r.x)) ** 2, 0) / test.reduce((a, r) => a + (r.y - ym) ** 2, 0);
+  return { predict, r2 };
+})();
+function yieldUI() { const x = ['yVeg', 'yLoad', 'yDep', 'yCyc', 'yTmp', 'yFr'].map(id => +$('#' + id).value); $('#yPred').textContent = fmt(RF.predict(x), 1); $('#yR2').textContent = fmt(RF.r2, 2); }
+['yVeg', 'yLoad', 'yDep', 'yCyc', 'yTmp', 'yFr'].forEach(id => $('#' + id).addEventListener('input', yieldUI)); yieldUI();
+
 // ---------- IOT ----------
 const TR = ['A', 'B', 'C', 'D'].map((n, i) => ({ n, t: 29 + i * .4, h: 72 + i, m: 74 + i, hist: [] }));
 let running = true, fault = false;
@@ -377,6 +429,7 @@ const P = [
   { id: 'fcr', l: 'Feed conversion ratio', v: 1.38, min: 1.0, max: 1.8, step: .01, s: 'Tuychiev & Khujamov (2025)' },
   { id: 'lf', l: 'Landfill emissions (kg CO₂e per tonne)', v: 1030, min: 700, max: 1300, step: 10, s: 'Pambudi & Fardiani (2026), Forster et al. (2021)' },
   { id: 'bsf', l: 'Larval treatment emissions (kg CO₂e per tonne)', v: 30.61, min: 10, max: 120, step: .01, s: 'Syafrudin et al. (2026)' },
+  { id: 'sv', l: 'Feed cost saved per tonne of leftovers (Rp thousand)', v: 462, min: 200, max: 700, step: 1, s: 'Bahtiar & Kamelia (2024), Rp270 million over 10 years for 58.4 t a year' },
 ];
 $('#sliders').innerHTML = '<h3>Parameters</h3>' + P.map(p => `<label>${p.l} <b id="${p.id}V">${p.v}</b></label><input type="range" id="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.v}"><div class="note">${p.s}</div>`).join('');
 function calc() {
@@ -384,7 +437,7 @@ function calc() {
   const waste = g('ben') * g('rate') / 1000, dm = waste * g('dm') / 100, meal = dm * g('yld') / 1000, feed = meal / (g('inc') / 100), fish = feed / g('fcr');
   const co2 = waste * (g('lf') - g('bsf')) / 1000;
   $('#flow').innerHTML = [[fmt(waste), 't leftovers'], [fmt(dm), 't dry matter'], [fmt(meal), 't larval meal'], [fmt(feed), 't feed'], [fmt(fish), 't catfish']].map(x => `<div class="s"><b>${x[0]}</b><span>${x[1]}</span></div>`).join('');
-  $('#pRatio').textContent = fmt(fish / waste * 1000); $('#pCO2').textContent = fmt(co2);
+  $('#pRatio').textContent = fmt(meal / waste * 1000); $('#pSave').textContent = fmt(waste * g('sv') * 1000 / 1e9, 2); $('#pCO2').textContent = fmt(co2);
   $('#pWarn').textContent = g('inc') > 20 ? 'Above the tested dietary share. Full replacement reduced catfish growth and survival (Bartucz et al., 2023), so treat this result with caution.' : 'Within the tested range of larval meal use.';
 }
 P.forEach(p => $('#' + p.id).addEventListener('input', calc)); calc();
